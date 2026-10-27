@@ -3,6 +3,8 @@ import swaggerUi from "swagger-ui-express";
 import swaggerJSDoc from "swagger-jsdoc";
 import dotenv from "dotenv";
 import multer from "multer";
+import { PrismaMariaDb } from "@prisma/adapter-mariadb";
+import { PrismaClient } from "@prisma/client";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
@@ -11,6 +13,15 @@ dotenv.config();
 
 const app = express();
 const port = 3000;
+const adapter = new PrismaMariaDb({
+  host: process.env.DB_HOST || "localhost",
+  port: Number(process.env.DB_PORT || 3306),
+  user: process.env.DB_USER || "root",
+  password: process.env.DB_PASSWORD || "",
+  database: process.env.DB_NAME || "padaria",
+  connectionLimit: 10
+});
+const prisma = new PrismaClient({ adapter });
 
 app.use(express.json());
 
@@ -80,8 +91,7 @@ const swaggerSpec = swaggerJSDoc(swaggerOptions);
 
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-// "banco de dados" fictício em memória
-const produtos = [
+const produtosIniciais = [
   { id: 1, nome: "Pão Francês", categoria: "Pães", quantidade: 120, precoUnitario: 0.75 },
   { id: 2, nome: "Pão de Queijo", categoria: "Salgados", quantidade: 80, precoUnitario: 3.5 },
   { id: 3, nome: "Bolo de Cenoura", categoria: "Bolos", quantidade: 10, precoUnitario: 25.0 },
@@ -89,8 +99,24 @@ const produtos = [
   { id: 5, nome: "Sonho", categoria: "Doces", quantidade: 40, precoUnitario: 4.5 }
 ];
 
-// controla o próximo ID, mesmo depois de exclusões
-let proximoId = produtos.length + 1;
+const mapearProduto = (produto) => ({
+  ...produto,
+  precoUnitario: Number(produto.precoUnitario)
+});
+
+async function inicializarBanco() {
+  const total = await prisma.produto.count();
+  if (total === 0) {
+    await prisma.produto.createMany({
+      data: produtosIniciais.map(({ nome, categoria, quantidade, precoUnitario }) => ({
+        nome,
+        categoria,
+        quantidade,
+        precoUnitario
+      }))
+    });
+  }
+}
 
 const validarId = (id) => Number.isInteger(id) && id > 0;
 
@@ -348,12 +374,13 @@ app.get("/", (req, res) => {
  */
 
 // LISTAR TODOS OS PRODUTOS
-app.get("/produtos", (req, res) => {
-  res.json(produtos);
+app.get("/produtos", async (req, res) => {
+  const produtos = await prisma.produto.findMany({ orderBy: { id: "asc" } });
+  res.json(produtos.map(mapearProduto));
 });
 
 // CONSULTAR PRODUTO POR ID
-app.get("/produtos/:id", (req, res) => {
+app.get("/produtos/:id", async (req, res) => {
   const id = Number(req.params.id);
 
   if (!validarId(id)) {
@@ -362,7 +389,8 @@ app.get("/produtos/:id", (req, res) => {
     });
   }
 
-  const produto = produtos.find((produto) => produto.id === id);
+  const produtoEncontrado = await prisma.produto.findUnique({ where: { id } });
+  const produto = produtoEncontrado ? mapearProduto(produtoEncontrado) : null;
 
   if (!produto) {
     return res.status(404).json({
@@ -374,7 +402,7 @@ app.get("/produtos/:id", (req, res) => {
 });
 
 // CADASTRAR NOVO PRODUTO
-app.post("/produtos", autenticarToken, (req, res) => {
+app.post("/produtos", autenticarToken, async (req, res) => {
   const dados = req.body ?? {};
   const { nome, categoria, quantidade, precoUnitario } = dados;
   const erroValidacao = validarDadosProduto(dados, true);
@@ -385,15 +413,9 @@ app.post("/produtos", autenticarToken, (req, res) => {
     });
   }
 
-  const novoProduto = {
-    id: proximoId++,
-    nome,
-    categoria,
-    quantidade,
-    precoUnitario
-  };
-
-  produtos.push(novoProduto);
+  const novoProduto = mapearProduto(await prisma.produto.create({
+    data: { nome, categoria, quantidade, precoUnitario }
+  }));
 
   res.status(201).json({
     mensagem: "Produto cadastrado com sucesso",
@@ -402,7 +424,7 @@ app.post("/produtos", autenticarToken, (req, res) => {
 });
 
 // EDITAR PRODUTO POR ID
-app.put("/produtos/:id", autenticarToken, (req, res) => {
+app.put("/produtos/:id", autenticarToken, async (req, res) => {
   const id = Number(req.params.id);
   const dados = req.body ?? {};
   const { nome, categoria, quantidade, precoUnitario } = dados;
@@ -413,9 +435,10 @@ app.put("/produtos/:id", autenticarToken, (req, res) => {
     });
   }
 
-  const produto = produtos.find((produto) => produto.id === id);
+  const produtoAtualEncontrado = await prisma.produto.findUnique({ where: { id } });
+  const produtoAtual = produtoAtualEncontrado ? mapearProduto(produtoAtualEncontrado) : null;
 
-  if (!produto) {
+  if (!produtoAtual) {
     return res.status(404).json({
       mensagem: "Produto não encontrado"
     });
@@ -433,10 +456,15 @@ app.put("/produtos/:id", autenticarToken, (req, res) => {
     return res.status(400).json({ mensagem: erroValidacao });
   }
 
-  if (nome !== undefined) produto.nome = nome;
-  if (categoria !== undefined) produto.categoria = categoria;
-  if (quantidade !== undefined) produto.quantidade = quantidade;
-  if (precoUnitario !== undefined) produto.precoUnitario = precoUnitario;
+  const dadosAtualizados = Object.fromEntries(
+    ["nome", "categoria", "quantidade", "precoUnitario"]
+      .filter((campo) => dados[campo] !== undefined)
+      .map((campo) => [campo, dados[campo]])
+  );
+  const produto = mapearProduto(await prisma.produto.update({
+    where: { id },
+    data: dadosAtualizados
+  }));
 
   res.json({
     mensagem: "Produto atualizado com sucesso",
@@ -445,7 +473,7 @@ app.put("/produtos/:id", autenticarToken, (req, res) => {
 });
 
 // EXCLUIR PRODUTO POR ID
-app.delete("/produtos/:id", autenticarToken, (req, res) => {
+app.delete("/produtos/:id", autenticarToken, async (req, res) => {
   const id = Number(req.params.id);
 
   if (!validarId(id)) {
@@ -454,15 +482,16 @@ app.delete("/produtos/:id", autenticarToken, (req, res) => {
     });
   }
 
-  const index = produtos.findIndex((produto) => produto.id === id);
+  const produtoEncontrado = await prisma.produto.findUnique({ where: { id } });
+  const produtoRemovido = produtoEncontrado ? mapearProduto(produtoEncontrado) : null;
 
-  if (index === -1) {
+  if (!produtoRemovido) {
     return res.status(404).json({
       mensagem: "Produto não encontrado"
     });
   }
 
-  const [produtoRemovido] = produtos.splice(index, 1);
+  await prisma.produto.delete({ where: { id } });
 
   res.json({
     mensagem: "Produto removido com sucesso",
@@ -498,10 +527,19 @@ app.use((erro, req, res, next) => {
     return res.status(400).json({ mensagem: erro.message });
   }
 
-  next(erro);
+  console.error("Erro ao processar requisição:", erro);
+  res.status(500).json({ mensagem: "Erro interno do servidor" });
 });
 
-app.listen(port, () => {
-  console.log(`Servidor rodando em http://localhost:${port}`);
-  console.log(`Documentação Swagger em http://localhost:${port}/api-docs`);
-});
+inicializarBanco()
+  .then(() => {
+    app.listen(port, () => {
+      console.log(`Servidor rodando em http://localhost:${port}`);
+      console.log(`Documentação Swagger em http://localhost:${port}/api-docs`);
+      console.log(`Banco conectado: ${process.env.DB_NAME || "padaria"}`);
+    });
+  })
+  .catch((erro) => {
+    console.error("Não foi possível conectar ao MariaDB. Verifique o XAMPP e as variáveis DB_* do .env.", erro.message);
+    process.exit(1);
+  });

@@ -6,6 +6,8 @@ Projeto escolar de uma API REST para gerenciamento do estoque de produtos de uma
 
 - Node.js
 - Express
+- Prisma Client e Prisma MariaDB Adapter
+- MySQL/MariaDB (XAMPP)
 - Multer
 - dotenv
 - swagger-ui-express
@@ -42,15 +44,32 @@ Projeto escolar de uma API REST para gerenciamento do estoque de produtos de uma
 
    ```env
    TOKEN_SECRETO=seu-token-secreto
+   DB_HOST=localhost
+   DB_PORT=3306
+   DB_USER=root
+   DB_PASSWORD=
+   DB_NAME=padaria
+   DATABASE_URL="mysql://root:@localhost:3306/padaria"
    ```
 
-5. Inicie o servidor:
+   No XAMPP padrão, o usuário é `root` e a senha fica vazia. Se você configurou uma senha, informe-a em `DB_PASSWORD`.
+
+5. Abra o painel do XAMPP e inicie **MySQL**. No navegador, acesse [http://localhost/phpmyadmin](http://localhost/phpmyadmin) e crie um banco chamado `padaria` (collation recomendada: `utf8mb4_general_ci`).
+
+6. Sincronize o modelo Prisma com o MariaDB e gere o Prisma Client:
+
+   ```bash
+   npx prisma db push
+   npx prisma generate
+   ```
+
+7. Inicie a API:
 
    ```bash
    node server.js
    ```
 
-A API ficará disponível em `http://localhost:3000`.
+A API ficará disponível em `http://localhost:3000`. O Prisma Client acessa o MariaDB usando o Prisma MariaDB Adapter. Os exemplos de produtos são inseridos automaticamente na primeira inicialização e os dados permanecem após reiniciar a API.
 
 ## Documentação Swagger
 
@@ -130,6 +149,6 @@ curl -X POST http://localhost:3000/upload \
 
 ## Observações
 
-- Os produtos são mantidos em memória enquanto o servidor está em execução.
+- Os dados dos produtos são armazenados no MariaDB do XAMPP.
 - O arquivo `.env` não deve ser versionado, pois contém o token da aplicação.
 - A pasta `src/uploads` é criada automaticamente quando o servidor é iniciado.
